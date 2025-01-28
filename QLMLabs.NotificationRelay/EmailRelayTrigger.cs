@@ -36,7 +36,7 @@ public class EmailRelayTrigger
 
         if (fromEmail == null)
         {
-            _logger.LogError("From Phone Number is not set.");
+            _logger.LogError("From Email is not set.");
             return req.CreateResponse(HttpStatusCode.InternalServerError);
         }
 
