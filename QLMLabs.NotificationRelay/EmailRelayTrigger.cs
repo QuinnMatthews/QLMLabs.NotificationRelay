@@ -6,27 +6,27 @@ using Microsoft.Extensions.Logging;
 using System.Text.Json;
 using Azure;
 using Azure.Communication;
-using Azure.Communication.Sms;
+using Azure.Communication.Email;
 
 namespace QLMLabs.NotificationRelay;
 
-public class SmailRelayTrigger
+public class EmailRelayTrigger
 {
     private readonly ILogger _logger;
 
-    public SMSRelayTrigger(ILoggerFactory loggerFactory)
+    public EmailRelayTrigger(ILoggerFactory loggerFactory)
     {
         _logger = loggerFactory.CreateLogger<SMSRelayTrigger>();
     }
 
-    [Function("SMSRelayTrigger")]
+    [Function("EmailRelayTrigger")]
     public async Task<HttpResponseData> Run([HttpTrigger(AuthorizationLevel.Function, "post")] HttpRequestData req,
         FunctionContext executionContext)
     {
-        _logger.LogInformation("New SMS Relay.");
+        _logger.LogInformation("New Email Relay.");
         
         string? connectionString = Environment.GetEnvironmentVariable("COMMUNICATION_SERVICES_CONNECTION_STRING");
-        string? fromPhoneNumber = Environment.GetEnvironmentVariable("FROM_PHONE_NUMBER");
+        string? fromEmail = Environment.GetEnvironmentVariable("FROM_EMAIL");
         
         if (connectionString == null)
         {
@@ -34,18 +34,18 @@ public class SmailRelayTrigger
             return req.CreateResponse(HttpStatusCode.InternalServerError);
         }
 
-        if (fromPhoneNumber == null)
+        if (fromEmail == null)
         {
             _logger.LogError("From Phone Number is not set.");
             return req.CreateResponse(HttpStatusCode.InternalServerError);
         }
 
-        SmsClient smsClient = new SmsClient(connectionString);
+        
         
         // Parse the request body to get the destination phone number and message
         string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
         
-        var notification = JsonSerializer.Deserialize<SMSRelayMessage>(requestBody);
+        var notification = JsonSerializer.Deserialize<EmailRelayMessage>(requestBody);
         
         if (notification == null)
         {
@@ -53,28 +53,42 @@ public class SmailRelayTrigger
             return req.CreateResponse(HttpStatusCode.BadRequest);
         }
         
-        if (notification.PhoneNumber == null || notification.Message == null)
+        if (notification.Email == null || notification.Message == null)
         {
-            _logger.LogError("PhoneNumber or Message is not set.");
+            _logger.LogError("Email or Message is not set.");
             return req.CreateResponse(HttpStatusCode.BadRequest);
         }
         
         try
         {
-            var sendSmsResponse = await smsClient.SendAsync(fromPhoneNumber, [ notification.PhoneNumber ], notification.Message);
-            _logger.LogInformation($"Sent SMS to {notification.PhoneNumber} with message: {notification.Message}");
+            var emailClient = new EmailClient(connectionString);
+
+            var emailMessage = new EmailMessage(
+                senderAddress: fromEmail,
+                content: new EmailContent("Test Email")
+                {
+                    PlainText = notification.Message
+                },
+                recipients: new EmailRecipients(new List<EmailAddress> { new EmailAddress(notification.Email) }));
+            
+            EmailSendOperation emailSendOperation = emailClient.Send(
+                WaitUntil.Completed,
+                emailMessage);
+            
+            _logger.LogInformation($"Sent Email to {notification.Email} with message: {notification.Message}");
             return req.CreateResponse(HttpStatusCode.OK);
+            
         }
         catch (RequestFailedException ex)
         {
-            _logger.LogError(ex, "Failed to send SMS.");
+            _logger.LogError(ex, "Failed to send email.");
             return req.CreateResponse(HttpStatusCode.InternalServerError);
         }
     }
     
-    public class SMSRelayMessage
+    public class EmailRelayMessage
     {
-        public string? PhoneNumber { get; set; }
+        public string? Email { get; set; }
         public string? Message { get; set; }
     }
 }
