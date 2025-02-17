@@ -10,14 +10,9 @@ using Azure.Communication.Email;
 
 namespace QLMLabs.NotificationRelay;
 
-public class EmailRelayTrigger
+public class EmailRelayTrigger(ILoggerFactory loggerFactory)
 {
-    private readonly ILogger _logger;
-
-    public EmailRelayTrigger(ILoggerFactory loggerFactory)
-    {
-        _logger = loggerFactory.CreateLogger<SMSRelayTrigger>();
-    }
+    private readonly ILogger _logger = loggerFactory.CreateLogger<SMSRelayTrigger>();
 
     [Function("EmailRelayTrigger")]
     public async Task<HttpResponseData> Run([HttpTrigger(AuthorizationLevel.Function, "post")] HttpRequestData req,
@@ -53,7 +48,7 @@ public class EmailRelayTrigger
             return req.CreateResponse(HttpStatusCode.BadRequest);
         }
         
-        if (notification.Email == null || notification.Message == null)
+        if (notification.To.Count == 0 || notification.Message == null)
         {
             _logger.LogError("Email or Message is not set.");
             return req.CreateResponse(HttpStatusCode.BadRequest);
@@ -65,17 +60,29 @@ public class EmailRelayTrigger
 
             var emailMessage = new EmailMessage(
                 senderAddress: fromEmail,
-                content: new EmailContent("Test Email")
+                content: new EmailContent(notification.Subject ?? "No Subject")
                 {
-                    PlainText = notification.Message
+                    PlainText = notification.Message,
+                    
                 },
-                recipients: new EmailRecipients(new List<EmailAddress> { new EmailAddress(notification.Email) }));
+                recipients: new EmailRecipients(
+                    notification.To.Select(to => new EmailAddress(to)),
+                    notification.CC?.Select(cc => new EmailAddress(cc)),
+                    notification.Bcc?.Select(bcc => new EmailAddress(bcc))
+                ));
             
-            EmailSendOperation emailSendOperation = emailClient.Send(
+            EmailSendOperation emailSendOperation = await emailClient.SendAsync(
                 WaitUntil.Completed,
                 emailMessage);
             
-            _logger.LogInformation($"Sent Email to {notification.Email} with message: {notification.Message}");
+            if (!emailSendOperation.HasValue || emailSendOperation.Value.Status == EmailSendStatus.Failed)
+            {
+                _logger.LogError($"Failed to send email to {notification.To}");
+                return req.CreateResponse(HttpStatusCode.InternalServerError);
+            }
+            
+            
+            _logger.LogInformation($"Sent Email to {notification.To} with message: {notification.Message}");
             return req.CreateResponse(HttpStatusCode.OK);
             
         }
@@ -88,7 +95,19 @@ public class EmailRelayTrigger
     
     public class EmailRelayMessage
     {
-        public string? Email { get; set; }
+        public List<string> To { get; set; } = [];
+        public List<string>? CC { get; set; }
+        public List<string>? Bcc { get; set; }
+        public string? Subject { get; set; }
         public string? Message { get; set; }
+        
+        // Depreciated: Backward compatibility with old API will be removed in future versions
+        public string? Email
+        {
+            set
+            {
+                if (value != null) To.Add(value);
+            }
+        }
     }
 }
